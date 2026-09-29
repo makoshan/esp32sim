@@ -30,7 +30,8 @@ impl Rmt {
     pub fn irq(&self) -> bool { self.int_raw & self.int_ena != 0 }
     pub fn read(&self, off: u32) -> u32 {
         match off {
-            0x20..=0x2c => { let c = &self.ch[((off - 0x20) / 4) as usize]; c.conf0 & !(1 << 0) & !(1 << 1) & !(1 << 2) & !(1 << 23) & !(1 << 24) }
+            // TX_START / MEM_RD_RST / APB_MEM_RST / TX_STOP / AFIFO_RST / CONF_UPDATE are self-clearing command bits: they read as 0
+            0x20..=0x2c => { let c = &self.ch[((off - 0x20) / 4) as usize]; c.conf0 & !(1 << 0) & !(1 << 1) & !(1 << 2) & !(1 << 7) & !(1 << 23) & !(1 << 24) }
             0x50..=0x5c => { let n = ((off - 0x50) / 4) as usize; let c = &self.ch[n]; ((c.wr as u32 + (n as u32) * 48) << 11) | ((c.mem_empty as u32) << 25) | if c.running { 2 << 22 } else { 0 } }
             0x70 => self.int_raw, 0x74 => self.int_raw & self.int_ena, 0x78 => self.int_ena,
             0x80..=0x8c => self.ch[((off - 0x80) / 4) as usize].carrier,
@@ -46,7 +47,7 @@ impl Rmt {
             0x20..=0x2c => {
                 let n = ((off - 0x20) / 4) as usize;
                 let c = &mut self.ch[n];
-                c.conf0 = v;
+                c.conf0 = v & !(1 << 7);   // TX_STOP is a command, not state: a read-modify-write after a stop must not stop the next start
                 if v & (1 << 2) != 0 { c.wr = 0; }                          // APB_MEM_RST
                 if v & (1 << 1) != 0 { c.rd = 0; c.mem_empty = false; c.end_pending = false; }      // MEM_RD_RST
                 if v & (1 << 0) != 0 { c.running = true; c.rd = 0; c.mem_empty = false; c.end_pending = false; c.since_thr = 0; c.acc_cycles = 0; c.bits.clear(); c.loop_count = 0; }   // TX_START
@@ -134,4 +135,20 @@ impl Device for Rmt {
     fn irq_sources(&self) -> u64 { self.irq() as u64 }
     fn clock(&self) -> Option<ClockDomain> { Some(ClockDomain::Cpu) }
     fn tick(&mut self, cycles: u64) { Rmt::tick(self, cycles) }
+}
+
+#[cfg(test)]
+mod tx_stop_tests {
+    use super::*;
+    /// The IDF 4.4 legacy driver stops a channel (TX_STOP = 1) and later starts it with a
+    /// read-modify-write of CONF0: the stop must not come back and cancel the start.
+    #[test]
+    fn tx_stop_is_a_command_not_state() {
+        let mut r = Rmt::new(240_000_000);
+        r.write(0x20, 1 << 7);                    // stop
+        assert_eq!(r.read(0x20) & (1 << 7), 0);
+        let v = r.read(0x20) | 1;                 // RMW start
+        r.write(0x20, v);
+        assert!(r.ch[0].running);
+    }
 }
