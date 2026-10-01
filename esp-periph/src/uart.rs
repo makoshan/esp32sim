@@ -10,6 +10,11 @@ const RX_FIFO_SIZE: usize = 128;
 const INT_RXFIFO_FULL: u32 = 1 << 0;
 const INT_TXFIFO_EMPTY: u32 = 1 << 1;
 const INT_RXFIFO_OVF: u32 = 1 << 4;
+/// RXFIFO_TOUT (bit 8 on the S3/C3/C6 maps): silicon raises it once the line has been idle for
+/// rx_tout_thrhd symbols with bytes still in the FIFO. The IDF / Arduino drivers rely on it to
+/// pick up short messages below rxfifo_full_thrhd (a one-character command). Modelled as a level
+/// with no idle delay: raised while the FIFO holds bytes, so the driver's ISR drains them.
+const INT_RXFIFO_TOUT: u32 = 1 << 8;
 const INT_TX_DONE: u32 = 1 << 14;
 /// TXFIFO_EMPTY and TX_DONE: always true here, so INT_CLR cannot take them down.
 const INT_ALWAYS: u32 = INT_TXFIFO_EMPTY | INT_TX_DONE;
@@ -46,7 +51,10 @@ impl Uart {
     /// driver that wants every byte sets 1. RXFIFO_FULL is a level here: it stays raised while the count is at or
     /// over the threshold, so a driver that clears it before draining is woken again.
     fn rx_full_threshold(&self) -> usize { ((self.ram.read(0x24) & self.layout.thrhd_mask) as usize).max(1) }
-    fn refresh_rx_full(&mut self) { if self.rx.len() >= self.rx_full_threshold() { self.int_raw |= INT_RXFIFO_FULL; } }
+    fn refresh_rx_full(&mut self) {
+        if self.rx.len() >= self.rx_full_threshold() { self.int_raw |= INT_RXFIFO_FULL; }
+        if !self.rx.is_empty() { self.int_raw |= INT_RXFIFO_TOUT; }
+    }
     pub fn rx_pending(&self) -> usize { self.rx.len() }
     pub fn read(&mut self, off: u32) -> u32 {
         match off {
@@ -117,5 +125,18 @@ mod tests {
         assert_eq!(u.read(0x1c) & 0xff, 1);
         u.write(0x20, 1 << 22);
         assert_eq!(u.read(0x1c) & 0xff, 0);
+    }
+
+    /// A one-character command (below rxfifo_full_thrhd) still wakes the IDF / Arduino driver:
+    /// RXFIFO_TOUT is up while bytes wait, and drops once the FIFO is drained and cleared.
+    #[test]
+    fn short_message_raises_rx_timeout() {
+        let mut u = Uart::new(UartLayout::S3);
+        u.write(0x24, 120); u.write(0xc, INT_RXFIFO_TOUT);
+        u.host_input(b"?");
+        assert!(u.irq() && u.read(0x4) & INT_RXFIFO_FULL == 0);
+        let _ = u.read(0x0);                      // the driver drains the byte
+        u.write(0x10, INT_RXFIFO_TOUT);
+        assert!(!u.irq());
     }
 }
