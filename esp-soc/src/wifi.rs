@@ -63,7 +63,7 @@ impl ApConfig {
                     let mut octets = value.split(':');
                     for byte in &mut cfg.bssid {
                         let octet = octets.next().filter(|s| s.len() == 2 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-                            .ok_or_else(&invalid)?;
+                            .ok_or_else(invalid)?;
                         *byte = u8::from_str_radix(octet, 16).map_err(|_| invalid())?;
                     }
                     if octets.next().is_some() { return Err(invalid()); }

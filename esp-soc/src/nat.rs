@@ -34,7 +34,7 @@ static CONNECTING: AtomicUsize = AtomicUsize::new(0);
 struct ConnectPermit<'a>(&'a AtomicUsize);
 impl<'a> ConnectPermit<'a> {
     fn acquire(counter: &'a AtomicUsize) -> Option<Self> {
-        counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < MAX_CONNECTS).then_some(n + 1)).ok().map(|_| Self(counter))
+        counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < MAX_CONNECTS).then_some(n + 1)).ok().map(|_| Self(counter))
     }
 }
 impl Drop for ConnectPermit<'_> {
