@@ -1014,7 +1014,11 @@ impl<S: Soc> Machine<S> {
                 ScriptAction::Stop => { self.max_cycles = 0; stopped = true; }
                 ScriptAction::Touch(x, y, d) => { self.bus.touch_input(x, y, d); }
                 ScriptAction::Poke(a, v) => { let _ = self.bus.write32_unpriced(a, v); }
-                ScriptAction::Analog(pin, src) => self.bus.analog_set(pin, src),
+                ScriptAction::Analog(pin, mut src) => {
+                    // a waveform plays from when it is applied: a `waituart0` before it moves `t`, so the start moves too
+                    if let esp_periph::AnalogSource::Wave { start_cycles, .. } = &mut src { *start_cycles = t; }
+                    self.bus.analog_set(pin, src)
+                }
                 ScriptAction::WaitUart0(..) => {}
             }
         }
